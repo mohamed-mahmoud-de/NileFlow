@@ -1,0 +1,104 @@
+services:
+  # ========== MESSAGE BROKER ==========
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: nileflow-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - nileflow-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: nileflow-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - nileflow-net
+
+  # ========== DATABASES ==========
+  postgres:
+    image: postgres:16-alpine
+    container_name: nileflow-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nileflow}
+      POSTGRES_USER: ${POSTGRES_USER:-nileflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nileflow_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./storage/postgres/init:/docker-entrypoint-initdb.d
+    networks:
+      - nileflow-net
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: nileflow-cassandra
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    environment:
+      CASSANDRA_CLUSTER_NAME: nileflow
+      HEAP_NEWSIZE: 128M
+      MAX_HEAP_SIZE: 512M
+    networks:
+      - nileflow-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: nileflow-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - nileflow-net
+
+  # ========== SPARK ==========
+  spark-master:
+    image: apache/spark:3.5.6-python3
+    container_name: nileflow-spark-master
+    command: /opt/spark/sbin/start-master.sh
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      SPARK_NO_DAEMONIZE: "true"
+    networks:
+      - nileflow-net
+
+  spark-worker:
+    image: apache/spark:3.5.6-python3
+    container_name: nileflow-spark-worker
+    depends_on:
+      - spark-master
+    command: /opt/spark/sbin/start-worker.sh spark://spark-master:7077
+    environment:
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+      SPARK_NO_DAEMONIZE: "true"
+    networks:
+      - nileflow-net
+
+networks:
+  nileflow-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  cassandra-data:

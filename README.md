@@ -159,11 +159,11 @@ Data Sources ──► Kafka Topics ──► Spark Structured Streaming ──�
   <tr>
     <td><strong>Data Sources</strong></td>
     <td>
-      <img src="https://img.shields.io/badge/Google%20Routes%20API-4285F4?style=flat-square&logo=googlemaps&logoColor=white" alt="Google Routes"/>
+      <img src="https://img.shields.io/badge/TomTom%20Traffic%20API-D32F2F?style=flat-square&logo=tomtom&logoColor=white" alt="TomTom"/>
       <img src="https://img.shields.io/badge/Open--Meteo-orange?style=flat-square" alt="Open-Meteo"/>
       <img src="https://img.shields.io/badge/Transport%20for%20Cairo-GTFS-blue?style=flat-square" alt="TfC"/>
     </td>
-    <td>Live traffic, weather observations, transit routes and schedules</td>
+    <td>Live traffic flow and routing, weather observations, transit routes and schedules</td>
   </tr>
 </table>
 
@@ -188,7 +188,7 @@ Data Sources ──► Kafka Topics ──► Spark Structured Streaming ──�
 
 - [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
 - Python 3.11+
-- API keys for Google Routes API (or self-hosted OSRM)
+- TomTom API key ([free signup](https://developer.tomtom.com) — no credit card required)
 
 ### Quick Start
 
@@ -196,6 +196,9 @@ Data Sources ──► Kafka Topics ──► Spark Structured Streaming ──�
 # Clone the repository
 git clone https://github.com/mohamed-mahmoud-de/NileFlow.git
 cd NileFlow
+
+# Copy env template and fill in your API keys
+cp .env.example .env
 
 # Start the full stack
 docker-compose up -d
@@ -208,18 +211,33 @@ docker-compose ps
 
 ```
 NileFlow/
-├── producers/              # Kafka producers (traffic, weather, vehicle positions)
-├── spark/                  # Spark Structured Streaming jobs
-├── airflow/                # Airflow DAGs (refresh, quality checks)
-├── dashboard/              # Streamlit/Grafana dashboard
-├── alerts/                 # Discord webhook + Redis alert consumer
-├── database/               # Schema definitions and init scripts
-│   ├── postgres/
-│   ├── cassandra/
-│   └── elasticsearch/
-├── config/                 # Configuration files
-├── assets/                 # Images, diagrams, logos
-├── docker-compose.yml      # Full stack orchestration
+├── config/                 # Central settings, env-based configuration
+├── producers/
+│   ├── traffic/            # TomTom API → Kafka (traffic_events)
+│   ├── weather/            # Open-Meteo API → Kafka (weather_events)
+│   └── vehicle_positions/  # Synthetic GPS pings → Kafka (vehicle_position_events)
+├── spark/
+│   ├── streaming/          # Spark Structured Streaming jobs
+│   └── utils/              # Shared Spark helpers
+├── storage/
+│   ├── postgres/init/      # SQL schemas + seed data (auto-runs on first start)
+│   ├── cassandra/init/     # CQL keyspace + table definitions
+│   └── elasticsearch/init/ # Index templates
+├── airflow/
+│   ├── dags/               # DAG files (daily refresh, data quality)
+│   └── plugins/
+├── dashboard/              # Streamlit app (live map, charts, alerts)
+├── alerts/                 # Redis consumer + Discord webhook poster
+├── scripts/                # Helper scripts (Kafka topic creation, etc.)
+├── data/
+│   ├── reference/gtfs/     # TfC GTFS files (gitignored)
+│   └── sample_events/      # Sample JSON for testing
+├── tests/
+├── docs/                   # Project plan, playbook PDFs
+├── assets/                 # Logo, banner, architecture diagram
+├── docker-compose.yml      # Kafka, Spark, Postgres, Cassandra, Redis
+├── requirements.txt
+├── .env.example            # Environment template (safe to commit)
 └── README.md
 ```
 

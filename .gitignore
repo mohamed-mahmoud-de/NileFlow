@@ -1,1 +1,50 @@
-.claude
+# === NileFlow .gitignore ===
+
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+postgres-data/
+cassandra-data/
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+
+# Data (large files — keep sample_events only)
+data/reference/gtfs/*.txt
+data/reference/gtfs/*.csv
+!data/sample_events/
+
+# Jupyter
+.ipynb_checkpoints/
