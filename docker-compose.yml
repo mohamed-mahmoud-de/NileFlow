@@ -72,10 +72,11 @@ services:
   spark-master:
     image: apache/spark:3.5.6-python3
     container_name: nileflow-spark-master
+    hostname: spark-master
     command: /opt/spark/sbin/start-master.sh
     ports:
-      - "8080:8080"
       - "7077:7077"
+      - "8081:8080"
     environment:
       SPARK_MASTER_HOST: spark-master
       SPARK_NO_DAEMONIZE: "true"
@@ -85,6 +86,7 @@ services:
   spark-worker:
     image: apache/spark:3.5.6-python3
     container_name: nileflow-spark-worker
+    hostname: spark-worker
     depends_on:
       - spark-master
     command: /opt/spark/sbin/start-worker.sh spark://spark-master:7077

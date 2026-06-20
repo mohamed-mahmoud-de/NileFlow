@@ -11,12 +11,10 @@ Purpose:
 """
 
 import sys
-import uuid
 import logging
 from datetime import datetime, timezone
 
 from cassandra.cluster import Cluster, NoHostAvailable
-from cassandra.query import SimpleStatement
 from cassandra import InvalidRequest, OperationTimedOut, ReadTimeout, WriteTimeout
 
 # --------------------------------------------------------------------------- #
@@ -35,23 +33,28 @@ CREATE_KEYSPACE_CQL = f"""
 
 CREATE_TABLE_CQL = f"""
     CREATE TABLE IF NOT EXISTS {KEYSPACE}.{TABLE} (
-        id UUID PRIMARY KEY,
-        corridor_id TEXT,
-        congestion_level FLOAT,
-        average_speed FLOAT,
-        event_time TIMESTAMP
-    )
+        corridor_id     TEXT,
+        event_time      TIMESTAMP,
+        travel_time_sec INT,
+        free_flow_sec   INT,
+        congestion_index DOUBLE,
+        speed_kmh       DOUBLE,
+        is_anomaly      BOOLEAN,
+        PRIMARY KEY (corridor_id, event_time)
+    ) WITH CLUSTERING ORDER BY (event_time DESC)
+      AND default_time_to_live = 2592000
 """
 
 INSERT_CQL = f"""
-    INSERT INTO {KEYSPACE}.{TABLE} (id, corridor_id, congestion_level, average_speed, event_time)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO {KEYSPACE}.{TABLE}
+        (corridor_id, event_time, travel_time_sec, free_flow_sec, congestion_index, speed_kmh, is_anomaly)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
 """
 
 SELECT_CQL = f"""
-    SELECT id, corridor_id, congestion_level, average_speed, event_time
+    SELECT corridor_id, event_time, travel_time_sec, free_flow_sec, congestion_index, speed_kmh, is_anomaly
     FROM {KEYSPACE}.{TABLE}
-    WHERE id = %s
+    WHERE corridor_id = %s AND event_time = %s
 """
 
 # --------------------------------------------------------------------------- #
@@ -78,11 +81,13 @@ def truncate_to_millisecond(dt: datetime) -> datetime:
 def build_sample_record() -> dict:
     """Builds one realistic congestion_metrics record for the test run."""
     return {
-        "id": uuid.uuid4(),
         "corridor_id": "CAIRO-RING-RD-SECTION-07",
-        "congestion_level": 0.78,            # 0.0 = free flow, 1.0 = gridlock
-        "average_speed": 23.4,               # km/h
         "event_time": truncate_to_millisecond(datetime.now(timezone.utc)),
+        "travel_time_sec": 540,
+        "free_flow_sec": 300,
+        "congestion_index": 0.78,
+        "speed_kmh": 23.4,
+        "is_anomaly": False,
     }
 
 
@@ -112,28 +117,29 @@ def ensure_schema(session) -> None:
 
 def insert_record(session, record: dict) -> None:
     """Inserts the sample congestion record using a parameterized statement."""
-    logger.info("Inserting sample record with id=%s ...", record["id"])
-    statement = SimpleStatement(INSERT_CQL)
+    logger.info("Inserting sample record for corridor=%s ...", record["corridor_id"])
     session.execute(
-        statement,
+        INSERT_CQL,
         (
-            record["id"],
             record["corridor_id"],
-            record["congestion_level"],
-            record["average_speed"],
             record["event_time"],
+            record["travel_time_sec"],
+            record["free_flow_sec"],
+            record["congestion_index"],
+            record["speed_kmh"],
+            record["is_anomaly"],
         ),
     )
     logger.info("Insert executed successfully.")
 
 
-def read_record(session, record_id: uuid.UUID):
-    """Reads the record back by primary key. Returns the row, or None."""
-    logger.info("Reading record back with id=%s ...", record_id)
-    result = session.execute(SELECT_CQL, (record_id,))
+def read_record(session, corridor_id: str, event_time: datetime):
+    """Reads the record back by composite primary key. Returns the row, or None."""
+    logger.info("Reading record back for corridor=%s at %s ...", corridor_id, event_time)
+    result = session.execute(SELECT_CQL, (corridor_id, event_time))
     row = result.one()
     if row is None:
-        logger.error("No row found for id=%s", record_id)
+        logger.error("No row found for corridor=%s at %s", corridor_id, event_time)
         return None
     logger.info("Record read back successfully.")
     return row
@@ -147,11 +153,13 @@ def verify_record(original: dict, retrieved) -> bool:
     logger.info("Verifying inserted record matches retrieved record ...")
 
     checks = {
-        "id": original["id"] == retrieved.id,
         "corridor_id": original["corridor_id"] == retrieved.corridor_id,
-        "congestion_level": abs(original["congestion_level"] - retrieved.congestion_level) < 1e-6,
-        "average_speed": abs(original["average_speed"] - retrieved.average_speed) < 1e-6,
         "event_time": original["event_time"] == retrieved.event_time,
+        "travel_time_sec": original["travel_time_sec"] == retrieved.travel_time_sec,
+        "free_flow_sec": original["free_flow_sec"] == retrieved.free_flow_sec,
+        "congestion_index": abs(original["congestion_index"] - retrieved.congestion_index) < 1e-6,
+        "speed_kmh": abs(original["speed_kmh"] - retrieved.speed_kmh) < 1e-6,
+        "is_anomaly": original["is_anomaly"] == retrieved.is_anomaly,
     }
 
     for field, passed in checks.items():
@@ -162,17 +170,19 @@ def verify_record(original: dict, retrieved) -> bool:
 
 def print_result(record: dict, retrieved) -> None:
     """Prints a clean, human-readable summary of the round-trip test."""
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print("CASSANDRA STORAGE LAYER VALIDATION - RESULT")
-    print("=" * 60)
-    print(f"{'Field':<20}{'Inserted':<25}{'Retrieved'}")
-    print("-" * 60)
-    print(f"{'id':<20}{str(record['id']):<25}{str(retrieved.id)}")
-    print(f"{'corridor_id':<20}{record['corridor_id']:<25}{retrieved.corridor_id}")
-    print(f"{'congestion_level':<20}{record['congestion_level']:<25}{retrieved.congestion_level}")
-    print(f"{'average_speed':<20}{record['average_speed']:<25}{retrieved.average_speed}")
-    print(f"{'event_time':<20}{str(record['event_time']):<25}{str(retrieved.event_time)}")
-    print("=" * 60 + "\n")
+    print("=" * 70)
+    print(f"{'Field':<20}{'Inserted':<30}{'Retrieved'}")
+    print("-" * 70)
+    print(f"{'corridor_id':<20}{record['corridor_id']:<30}{retrieved.corridor_id}")
+    print(f"{'event_time':<20}{str(record['event_time']):<30}{str(retrieved.event_time)}")
+    print(f"{'travel_time_sec':<20}{record['travel_time_sec']:<30}{retrieved.travel_time_sec}")
+    print(f"{'free_flow_sec':<20}{record['free_flow_sec']:<30}{retrieved.free_flow_sec}")
+    print(f"{'congestion_index':<20}{record['congestion_index']:<30}{retrieved.congestion_index}")
+    print(f"{'speed_kmh':<20}{record['speed_kmh']:<30}{retrieved.speed_kmh}")
+    print(f"{'is_anomaly':<20}{str(record['is_anomaly']):<30}{str(retrieved.is_anomaly)}")
+    print("=" * 70 + "\n")
 
 
 def main() -> int:
@@ -187,7 +197,7 @@ def main() -> int:
         sample_record = build_sample_record()
         insert_record(session, sample_record)
 
-        retrieved_row = read_record(session, sample_record["id"])
+        retrieved_row = read_record(session, sample_record["corridor_id"], sample_record["event_time"])
         if retrieved_row is None:
             logger.error("FAILURE: Inserted record could not be read back.")
             return 1
