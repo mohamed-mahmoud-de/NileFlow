@@ -68,6 +68,81 @@ services:
     networks:
       - nileflow-net
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: nileflow-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - nileflow-net
+
+  # ========== ORCHESTRATION ==========
+  airflow-init:
+    image: apache/airflow:2.10.4-python3.11
+    container_name: nileflow-airflow-init
+    entrypoint: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create --username admin --password admin
+          --firstname NileFlow --lastname Admin
+          --role Admin --email admin@nileflow.local || true
+      "
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://nileflow:nileflow_dev@postgres:5432/nileflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    depends_on:
+      - postgres
+    networks:
+      - nileflow-net
+
+  airflow-webserver:
+    image: apache/airflow:2.10.4-python3.11
+    container_name: nileflow-airflow-webserver
+    command: airflow webserver --port 8080
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://nileflow:nileflow_dev@postgres:5432/nileflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - nileflow-net
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.4-python3.11
+    container_name: nileflow-airflow-scheduler
+    command: airflow scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://nileflow:nileflow_dev@postgres:5432/nileflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - nileflow-net
+
   # ========== SPARK ==========
   spark-master:
     image: apache/spark:3.5.6-python3
@@ -104,3 +179,5 @@ networks:
 volumes:
   postgres-data:
   cassandra-data:
+  elasticsearch-data:
+  airflow-logs:
