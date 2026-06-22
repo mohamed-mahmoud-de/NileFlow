@@ -6,7 +6,7 @@ All settings are loaded from environment variables with sensible defaults for lo
 import os
 
 # --- Kafka ---
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
 KAFKA_TOPICS = {
     "traffic": "traffic_events",
     "weather": "weather_events",
