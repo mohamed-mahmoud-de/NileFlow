@@ -8,8 +8,6 @@ computes average speed and distinct vehicle count per corridor over a
 the resulting corridor speed stats into the shared `nileflow.congestion_metrics`
 Cassandra table (alongside the Traffic Stream Processor's output).
 
-Author: Habeba AbdEldayem
-File:   spark/streaming/vehicle_positions_processor.py
 """
 
 import sys
