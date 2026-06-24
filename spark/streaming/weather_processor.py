@@ -41,10 +41,10 @@ from pyspark.sql.types import (
 # --------------------------------------------------------------------------- #
 # Configuration (env vars with sane local defaults)
 # --------------------------------------------------------------------------- #
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "weather_events")
 
-CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "localhost")
+CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra")
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "nileflow")
 CASSANDRA_TABLE = os.getenv("CASSANDRA_TABLE", "weather_metrics")
 
@@ -52,7 +52,7 @@ CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/tmp/weather_checkpoint"
 
 # Fixed business rules (not deployment config, so not env-driven):
 WATERMARK_DELAY = "10 minutes"
-EVENT_TIME_FORMAT = "yyyy-MM-dd'T'HH:mm"  # e.g. "2026-06-23T14:00" (no "Z"/offset)
+EVENT_TIME_FORMAT = "yyyy-MM-dd'T'HH:mm"  # Open-Meteo returns e.g. "2026-06-23T14:00"
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -97,22 +97,15 @@ CASSANDRA_COLUMNS = [
 
 
 def build_spark_session() -> SparkSession:
-    """Create and configure the SparkSession with Kafka + Cassandra support.
-
-    Note: `spark.jars.packages` is set here as a convenience for local/ad-hoc
-    runs. For `spark-submit`, also pass the same coordinates via the
-    `--packages` CLI flag — that is the reliable way to resolve dependencies
-    in client/cluster deploy modes.
-    """
     spark = (
         SparkSession.builder.appName("NileFlow-WeatherProcessor")
-        .config("spark.cassandra.connection.host", CASSANDRA_HOST)
-        .config("spark.sql.streaming.schemaInference", "false")
         .config(
             "spark.jars.packages",
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,"
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,"
             "com.datastax.spark:spark-cassandra-connector_2.12:3.5.1",
         )
+        .config("spark.cassandra.connection.host", CASSANDRA_HOST)
+        .config("spark.sql.streaming.schemaInference", "false")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
