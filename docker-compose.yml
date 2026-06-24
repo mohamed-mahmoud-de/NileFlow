@@ -183,7 +183,28 @@ services:
       - spark-ivy-cache:/root/.ivy2
     networks:
       - nileflow-net
-
+  dashboard:
+    image: python:3.11-slim
+    container_name: nileflow-dashboard
+    working_dir: /app
+    command: >
+      bash -c "pip install --quiet streamlit folium
+      streamlit-folium plotly cassandra-driver requests
+      && streamlit run dashboard/app.py
+      --server.port=8501 --server.address=0.0.0.0"
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - REDIS_HOST=redis
+    networks:
+      - nileflow-net
+    depends_on:
+      - cassandra
+      - elasticsearch
+      - redis
 networks:
   nileflow-net:
     driver: bridge
@@ -194,5 +215,3 @@ volumes:
   elasticsearch-data:
   airflow-logs:
   spark-ivy-cache:
-
-
