@@ -9,11 +9,13 @@ writes the metrics to Cassandra, and pushes alerts for anomalous windows to
 Elasticsearch.
 """
 
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timezone
 
+import redis
 import requests
 
 from pyspark.sql import SparkSession, DataFrame
@@ -51,6 +53,11 @@ CASSANDRA_TABLE = os.getenv("CASSANDRA_TABLE", "congestion_metrics")
 ELASTICSEARCH_URL = os.getenv(
     "ELASTICSEARCH_URL", "http://elasticsearch:9200/congestion_alerts/_doc"
 )
+
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_ALERTS_CHANNEL = "nileflow:alerts"
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
 
 CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/tmp/traffic_checkpoint")
 
@@ -127,6 +134,19 @@ def send_elasticsearch_alert(row) -> None:
                 row["congestion_index"],
                 row["speed_kmh"],
             )
+            try:
+                redis_client.publish(REDIS_ALERTS_CHANNEL, json.dumps(alert_payload))
+                logger.info(
+                    "Alert published to Redis channel '%s' for corridor %s",
+                    REDIS_ALERTS_CHANNEL,
+                    row["corridor_id"],
+                )
+            except redis.exceptions.RedisError as exc:
+                logger.warning(
+                    "Failed to publish alert to Redis for corridor %s: %s",
+                    row["corridor_id"],
+                    exc,
+                )
     except requests.exceptions.RequestException as exc:
         logger.warning(
             "Failed to POST alert to Elasticsearch for corridor %s: %s",
