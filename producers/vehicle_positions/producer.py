@@ -15,11 +15,15 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Producer
 
+import redis as redis_lib
+
 from config.settings import (
     KAFKA_BOOTSTRAP_SERVERS,
     KAFKA_TOPICS,
     VEHICLE_POSITION_INTERVAL,
     CORRIDORS,
+    REDIS_HOST,
+    REDIS_PORT,
 )
 
 logging.basicConfig(
@@ -29,6 +33,19 @@ logging.basicConfig(
 logger = logging.getLogger("vehicle_positions_producer")
 
 producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
+
+redis_client = None
+for _redis_host in [REDIS_HOST, "localhost"]:
+    try:
+        redis_client = redis_lib.Redis(host=_redis_host, port=REDIS_PORT, decode_responses=True)
+        redis_client.ping()
+        logger.info("Connected to Redis at %s:%s", _redis_host, REDIS_PORT)
+        break
+    except Exception:
+        redis_client = None
+
+if not redis_client:
+    logger.warning("Redis unavailable — skipping position cache")
 
 VEHICLES_PER_CORRIDOR = 3
 
@@ -131,12 +148,25 @@ def main():
     logger.info(f"Simulating {len(vehicles)} vehicles across {len(CORRIDORS)} corridors.")
 
     while True:
+        all_positions = []
         for vehicle in vehicles:
             update_vehicle(vehicle, VEHICLE_POSITION_INTERVAL)
             event = build_event(vehicle)
             publish(topic, key=vehicle["vehicle_id"], value=event)
+            all_positions.append(event)
 
         producer.flush()
+
+        if redis_client:
+            try:
+                redis_client.set(
+                    "nileflow:vehicle_positions",
+                    json.dumps(all_positions),
+                    ex=60,
+                )
+            except Exception:
+                pass
+
         logger.info(
             f"Published {len(vehicles)} vehicle positions. "
             f"Sample: {vehicles[0]['vehicle_id']} at {vehicles[0]['progress']*100:.1f}%"

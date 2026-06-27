@@ -9,6 +9,7 @@ pyspark==3.5.3
 # Databases
 psycopg2-binary==2.9.10
 cassandra-driver==3.30.0
+pyasyncore==1.0.4
 
 # Redis
 redis==5.2.1

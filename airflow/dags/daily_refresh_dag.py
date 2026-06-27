@@ -120,50 +120,40 @@ def refresh_corridors(**context) -> None:
         conn.autocommit = False
 
         with conn.cursor() as cur:
-            # Create the table if it doesn't exist yet. corridor_id is the
-            # natural primary key, which is what makes the upsert below
-            # possible via ON CONFLICT.
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS corridors (
-                    corridor_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    updated_at TIMESTAMPTZ NOT NULL
-                );
-                """
-            )
+            cur.execute("SET search_path TO nileflow, public;")
 
-            now_utc = datetime.now(timezone.utc)
             rows = [
                 (
-                    corridor["corridor_id"],
-                    corridor.get("name", corridor["corridor_id"]),
-                    corridor.get("description"),
-                    now_utc,
+                    corridor["id"],
+                    corridor.get("name", corridor["id"]),
+                    corridor.get("city", "Cairo"),
+                    corridor["start"]["lat"],
+                    corridor["start"]["lon"],
+                    corridor["end"]["lat"],
+                    corridor["end"]["lon"],
                 )
                 for corridor in CORRIDORS
             ]
 
-            # execute_values batches the insert efficiently and ON CONFLICT
-            # makes the operation a true upsert: existing corridors are
-            # refreshed, new ones are inserted, in a single statement.
             execute_values(
                 cur,
                 """
-                INSERT INTO corridors (corridor_id, name, description, updated_at)
+                INSERT INTO corridors (corridor_id, name, city, start_lat, start_lon, end_lat, end_lon)
                 VALUES %s
                 ON CONFLICT (corridor_id) DO UPDATE SET
                     name = EXCLUDED.name,
-                    description = EXCLUDED.description,
-                    updated_at = EXCLUDED.updated_at;
+                    city = EXCLUDED.city,
+                    start_lat = EXCLUDED.start_lat,
+                    start_lon = EXCLUDED.start_lon,
+                    end_lat = EXCLUDED.end_lat,
+                    end_lon = EXCLUDED.end_lon;
                 """,
                 rows,
             )
 
         conn.commit()
         logger.info(
-            "Upserted %d corridor(s) into the 'corridors' table.", len(rows)
+            "Upserted %d corridor(s) into the corridors table.", len(rows)
         )
 
     except Exception as err:  # noqa: BLE001 - surface and re-raise for retry
@@ -197,14 +187,11 @@ def refresh_corridors(**context) -> None:
 # Task 2: recalculate_baselines
 # ---------------------------------------------------------------------------
 def _accumulate_corridor_rows(
-    rows, aggregates: dict[tuple[str, int], dict[str, float]]
+    rows, aggregates: dict[tuple[str, int, int], dict[str, float]]
 ) -> None:
     """
     Fold a batch of Cassandra rows (for a single corridor partition) into
-    the running per-(corridor_id, hour_of_day) sum/count aggregates.
-
-    Extracted as a helper so recalculate_baselines stays readable now that
-    rows are fetched per-partition rather than in one full-table query.
+    the running per-(corridor_id, day_of_week, hour_of_day) aggregates.
     """
     for row in rows:
         corridor_id = row.corridor_id
@@ -215,15 +202,17 @@ def _accumulate_corridor_rows(
         if congestion_index is None or speed_kmh is None or event_time is None:
             continue
 
+        day_of_week = event_time.weekday()
         hour_of_day = event_time.hour
-        key = (corridor_id, hour_of_day)
+        key = (corridor_id, day_of_week, hour_of_day)
+
+        travel_time_estimate = (1.0 + float(congestion_index)) * 60.0
 
         bucket = aggregates.setdefault(
             key,
-            {"congestion_sum": 0.0, "speed_sum": 0.0, "count": 0},
+            {"travel_time_sum": 0.0, "count": 0},
         )
-        bucket["congestion_sum"] += float(congestion_index)
-        bucket["speed_sum"] += float(speed_kmh)
+        bucket["travel_time_sum"] += travel_time_estimate
         bucket["count"] += 1
 
 
@@ -284,12 +273,10 @@ def recalculate_baselines(**context) -> int:
             """
         )
 
-        # Aggregate sums and counts per (corridor_id, hour_of_day) so the
-        # average can be computed with a single pass over the data.
-        aggregates: dict[tuple[str, int], dict[str, float]] = {}
+        aggregates: dict[tuple[str, int, int], dict[str, float]] = {}
 
         for corridor in CORRIDORS:
-            corridor_id = corridor["corridor_id"]
+            corridor_id = corridor["id"]
             try:
                 rows = session.execute(query, (corridor_id, cutoff))
             except Exception as partition_err:  # noqa: BLE001 - per-partition isolation
@@ -318,12 +305,13 @@ def recalculate_baselines(**context) -> int:
         baseline_rows = [
             (
                 corridor_id,
+                day_of_week,
                 hour_of_day,
-                bucket["congestion_sum"] / bucket["count"],
-                bucket["speed_sum"] / bucket["count"],
+                bucket["travel_time_sum"] / bucket["count"],
+                bucket["count"],
                 now_utc,
             )
-            for (corridor_id, hour_of_day), bucket in aggregates.items()
+            for (corridor_id, day_of_week, hour_of_day), bucket in aggregates.items()
         ]
 
         # ---- Step 2: write aggregated baselines to PostgreSQL ----
@@ -338,28 +326,17 @@ def recalculate_baselines(**context) -> int:
         pg_conn.autocommit = False
 
         with pg_conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS congestion_baselines (
-                    corridor_id TEXT NOT NULL,
-                    hour_of_day SMALLINT NOT NULL,
-                    avg_congestion DOUBLE PRECISION NOT NULL,
-                    avg_speed DOUBLE PRECISION NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    PRIMARY KEY (corridor_id, hour_of_day)
-                );
-                """
-            )
+            cur.execute("SET search_path TO nileflow, public;")
 
             execute_values(
                 cur,
                 """
                 INSERT INTO congestion_baselines
-                    (corridor_id, hour_of_day, avg_congestion, avg_speed, updated_at)
+                    (corridor_id, day_of_week, hour_of_day, avg_travel_time_sec, sample_count, updated_at)
                 VALUES %s
-                ON CONFLICT (corridor_id, hour_of_day) DO UPDATE SET
-                    avg_congestion = EXCLUDED.avg_congestion,
-                    avg_speed = EXCLUDED.avg_speed,
+                ON CONFLICT (corridor_id, day_of_week, hour_of_day) DO UPDATE SET
+                    avg_travel_time_sec = EXCLUDED.avg_travel_time_sec,
+                    sample_count = EXCLUDED.sample_count,
                     updated_at = EXCLUDED.updated_at;
                 """,
                 baseline_rows,
@@ -369,7 +346,7 @@ def recalculate_baselines(**context) -> int:
         rows_written = len(baseline_rows)
         logger.info(
             "Recalculated and wrote %d congestion baseline row(s) "
-            "(corridor_id x hour_of_day) covering the last %d day(s).",
+            "(corridor_id x day_of_week x hour_of_day) covering the last %d day(s).",
             rows_written,
             BASELINE_LOOKBACK_DAYS,
         )
