@@ -19,6 +19,18 @@ CREATE TABLE IF NOT EXISTS congestion_metrics (
 ) WITH CLUSTERING ORDER BY (event_time DESC)
   AND default_time_to_live = 2592000;  -- 30 days retention
 
+-- Per-corridor average vehicle speed (from simulated GPS pings).
+-- Separate table from congestion_metrics: sharing the same primary key
+-- would let these rows overwrite the TomTom congestion values.
+CREATE TABLE IF NOT EXISTS vehicle_speed_metrics (
+    corridor_id     TEXT,
+    event_time      TIMESTAMP,
+    avg_speed_kmh   DOUBLE,
+    is_anomaly      BOOLEAN,
+    PRIMARY KEY (corridor_id, event_time)
+) WITH CLUSTERING ORDER BY (event_time DESC)
+  AND default_time_to_live = 2592000;
+
 -- Weather observations
 CREATE TABLE IF NOT EXISTS weather_metrics (
     location        TEXT,

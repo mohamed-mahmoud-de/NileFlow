@@ -301,6 +301,20 @@ def get_cassandra_session():
     return session
 
 
+def cassandra_execute(query: str, params=None):
+    """Execute with one retry: the cached session dies if Cassandra restarts,
+    so rebuild it once before giving up. Returns [] when Cassandra is down
+    instead of crashing the whole page."""
+    try:
+        return get_cassandra_session().execute(query, params)
+    except Exception:
+        get_cassandra_session.clear()
+        try:
+            return get_cassandra_session().execute(query, params)
+        except Exception:
+            return []
+
+
 @st.cache_resource
 def get_redis_client():
     try:
@@ -312,10 +326,9 @@ def get_redis_client():
 
 
 def query_congestion_metrics(hours: int = 2) -> list[dict]:
-    session = get_cassandra_session()
     results = []
     for corridor in CORRIDORS:
-        rows = session.execute(
+        rows = cassandra_execute(
             "SELECT corridor_id, event_time, congestion_index, speed_kmh, is_anomaly "
             "FROM congestion_metrics WHERE corridor_id = %s "
             "AND event_time > %s ORDER BY event_time DESC",
@@ -333,10 +346,9 @@ def query_congestion_metrics(hours: int = 2) -> list[dict]:
 
 
 def query_latest_per_corridor() -> dict:
-    session = get_cassandra_session()
     latest = {}
     for corridor in CORRIDORS:
-        rows = session.execute(
+        rows = cassandra_execute(
             "SELECT corridor_id, event_time, congestion_index, speed_kmh, is_anomaly "
             "FROM congestion_metrics WHERE corridor_id = %s LIMIT 1",
             (corridor["id"],),
@@ -352,10 +364,9 @@ def query_latest_per_corridor() -> dict:
 
 
 def query_weather() -> list[dict]:
-    session = get_cassandra_session()
     results = []
     for loc in ["Cairo", "Alexandria"]:
-        rows = session.execute(
+        rows = cassandra_execute(
             "SELECT location, event_time, temperature_c, humidity_pct, "
             "precipitation_mm, wind_speed_kmh, weather_code "
             "FROM weather_metrics WHERE location = %s LIMIT 1",

@@ -5,7 +5,12 @@ Vehicle Positions Stream Processor
 Reads vehicle position pings from the `vehicle_position_events` Kafka topic,
 computes average speed per corridor over a 5-minute tumbling window, derives
 a slow-corridor anomaly flag, and writes the resulting corridor speed stats
-into the shared `nileflow.congestion_metrics` Cassandra table.
+into the `nileflow.vehicle_speed_metrics` Cassandra table.
+
+NOTE: this job must NOT write to `congestion_metrics` — its rows share the
+same (corridor_id, event_time) primary key as the traffic processor's
+windows, so writing congestion_index=0.0 there overwrites the real TomTom
+congestion values whenever the 5-min and 10-min window boundaries align.
 """
 
 import logging
@@ -19,7 +24,6 @@ from pyspark.sql.functions import (
     avg,
     window,
     when,
-    lit,
 )
 from pyspark.sql.types import (
     StructType,
@@ -47,7 +51,7 @@ KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "vehicle_position_events")
 CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra")
 CASSANDRA_PORT = os.getenv("CASSANDRA_PORT", "9042")
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "nileflow")
-CASSANDRA_TABLE = os.getenv("CASSANDRA_TABLE", "congestion_metrics")
+CASSANDRA_TABLE = os.getenv("CASSANDRA_TABLE", "vehicle_speed_metrics")
 
 CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/tmp/vehicle_positions_checkpoint")
 
@@ -149,10 +153,7 @@ def main() -> None:
         cassandra_ready_stream = with_anomaly_flag.select(
             col("corridor_id"),
             col("window.end").alias("event_time"),
-            lit(0).alias("travel_time_sec"),
-            lit(0).alias("free_flow_sec"),
-            lit(0.0).alias("congestion_index"),
-            col("avg_speed").alias("speed_kmh"),
+            col("avg_speed").alias("avg_speed_kmh"),
             col("is_anomaly"),
         )
 

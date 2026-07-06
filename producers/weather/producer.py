@@ -52,7 +52,10 @@ def fetch_weather(location: dict) -> dict | None:
             "wind_speed_10m,"
             "weather_code"
         ),
-        "timezone": "Africa/Cairo",
+        # UTC so the Spark processor stores event_time correctly
+        # (it parses "2026-07-06T01:00" as UTC; Africa/Cairo here shifted
+        # every timestamp +3h ahead of reality)
+        "timezone": "UTC",
     }
 
     try:

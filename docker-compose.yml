@@ -111,7 +111,7 @@ services:
     entrypoint: >
       sh -c "
         echo 'Waiting for Elasticsearch to be ready...';
-        until curl -s http://elasticsearch:9200/_cluster/health | grep -q '\"status\":\"green\"\|\"status\":\"yellow\"'; do
+        until curl -s http://elasticsearch:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'; do
           sleep 3;
         done;
         echo 'Elasticsearch is ready. Creating indices...';
@@ -214,6 +214,7 @@ services:
       - ./spark:/opt/nileflow/spark
       - ./config:/opt/nileflow/config
       - spark-ivy-cache:/root/.ivy2
+      - spark-checkpoints:/opt/nileflow/checkpoints
     networks:
       - nileflow-net
 
@@ -227,13 +228,18 @@ services:
     command: >
       bash -c "pip install --quiet requests redis && /opt/spark/sbin/start-worker.sh spark://spark-master:7077"
     environment:
-      SPARK_WORKER_MEMORY: 2G
-      SPARK_WORKER_CORES: 2
+      # 3 streaming apps run concurrently (traffic, weather, vehicles).
+      # Each app is submitted with spark.cores.max=2 and a 768m executor
+      # (see scripts/run_spark_jobs.*), so the worker needs 6 logical cores
+      # and ~2.5G to host all three. Keep heaps small: the host is 16 GB.
+      SPARK_WORKER_MEMORY: 3G
+      SPARK_WORKER_CORES: 6
       SPARK_NO_DAEMONIZE: "true"
     volumes:
       - ./spark:/opt/nileflow/spark
       - ./config:/opt/nileflow/config
       - spark-ivy-cache:/root/.ivy2
+      - spark-checkpoints:/opt/nileflow/checkpoints
     networks:
       - nileflow-net
 
@@ -346,3 +352,4 @@ volumes:
   elasticsearch-data:
   airflow-logs:
   spark-ivy-cache:
+  spark-checkpoints:

@@ -64,7 +64,9 @@ def get_traffic_data(corridor: dict) -> dict | None:
         free_flow_time = summary["noTrafficTravelTimeInSeconds"]
         distance_m = summary["lengthInMeters"]
 
-        congestion_index = (travel_time - free_flow_time) / free_flow_time
+        # Clamp at 0: off-peak routes can beat the free-flow baseline,
+        # which would otherwise produce negative congestion values
+        congestion_index = max(0.0, (travel_time - free_flow_time) / free_flow_time)
         speed_kmh = (distance_m / 1000) / (travel_time / 3600)
 
         return {

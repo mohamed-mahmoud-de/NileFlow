@@ -2,6 +2,7 @@
 
 # Claude Code
 .claude/
+claude.md
 
 # Python
 __pycache__/
@@ -36,6 +37,7 @@ cassandra-data/
 spark-warehouse/
 metastore_db/
 derby.log
+spark/logs/
 
 # Airflow
 airflow/logs/
