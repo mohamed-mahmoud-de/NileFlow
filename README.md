@@ -243,6 +243,16 @@ humidity_pct     DOUBLE
 precipitation_mm DOUBLE
 wind_speed_kmh   DOUBLE
 weather_code     INT          -- WMO weather code
+
+-- nileflow.vehicle_speed_metrics
+-- Partition key: corridor_id | Clustering: event_time DESC | TTL: 30 days
+-- Written by the vehicle positions processor (5-min windows).
+-- Kept separate from congestion_metrics: both key on (corridor_id, event_time),
+-- so sharing one table would let vehicle rows overwrite TomTom congestion values.
+corridor_id      TEXT
+event_time       TIMESTAMP
+avg_speed_kmh    DOUBLE
+is_anomaly       BOOLEAN      -- avg speed below 20 km/h
 ```
 
 ### Elasticsearch — Alert & Event Logs
@@ -308,6 +318,10 @@ The Streamlit dashboard provides real-time visibility into traffic conditions ac
 - A [TomTom API key](https://developer.tomtom.com) (free tier — no credit card required)
 - (Optional) A [Discord webhook URL](https://support.discord.com/hc/en-us/articles/228383668) for real-time alerts
 
+> **RAM tip:** the full stack (18 containers) plus the 3 Spark streaming jobs uses **~8–10 GB**.
+> On a 16 GB machine, close heavy apps while the platform runs — if Docker Desktop starts
+> returning errors, it's almost always memory pressure.
+
 ### Quick Start
 
 ```bash
@@ -320,18 +334,25 @@ cp .env.example .env
 # Edit .env and add your TOMTOM_API_KEY and DISCORD_WEBHOOK_URL
 
 # 3. Start the entire platform
-docker-compose up -d
+docker compose up -d
 
-# 4. Verify all services are running
-docker-compose ps
+# 4. Verify all services are running (wait ~2-3 min for init on first start)
+docker compose ps
+
+# 5. Submit the 3 Spark streaming jobs — REQUIRED, the dashboard is empty without them
+./scripts/run_spark_jobs.sh          # macOS / Linux / Git Bash
+.\scripts\run_spark_jobs.ps1         # Windows PowerShell
 ```
 
-That's it. The entire platform starts automatically:
+The infrastructure starts automatically:
 - Kafka topics are auto-created when producers first publish
 - Cassandra keyspace and tables are initialized by the `cassandra-init` service
 - Elasticsearch indices are created by the `elasticsearch-init` service
 - PostgreSQL schema and seed data load on first container start
 - All three producers start streaming data immediately
+
+The **Spark streaming jobs do not auto-start** — they are the processing layer that
+writes to Cassandra, so step 5 is what actually feeds the dashboard.
 
 ### Access Points
 
@@ -348,37 +369,49 @@ That's it. The entire platform starts automatically:
 
 ### Running Spark Streaming Jobs
 
-After the infrastructure is up, submit the Spark processors:
+After the infrastructure is up, submit all three processors with one script:
 
 ```bash
-# Traffic processor (congestion index + anomaly detection)
-docker exec nileflow-spark-master /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
-  /opt/nileflow/spark/streaming/traffic_processor.py
-
-# Weather processor
-docker exec nileflow-spark-master /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
-  /opt/nileflow/spark/streaming/weather_processor.py
-
-# Vehicle positions processor
-docker exec nileflow-spark-master /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
-  /opt/nileflow/spark/streaming/vehicle_positions_processor.py
+./scripts/run_spark_jobs.sh          # macOS / Linux / Git Bash
+.\scripts\run_spark_jobs.ps1         # Windows PowerShell
 ```
+
+Each job runs detached inside the `spark-master` container with `spark.cores.max=2`
+and small heaps (512m driver / 768m executor), so all three fit on the 6-core / 3 GB
+worker at once. Checkpoints persist on the shared `spark-checkpoints` volume, and
+job output is written to `spark/logs/*.log` on the host.
+
+**Verify:** open the Spark master UI at http://localhost:8081 — you should see
+**3 Running Applications** (`NileFlow-TrafficProcessor`, `NileFlow-WeatherProcessor`,
+`NileFlow-VehiclePositionsProcessor`). On first run Spark downloads connector JARs
+(~1–2 min); they're cached afterwards.
+
+```bash
+# Watch a job's log
+tail -f spark/logs/traffic_processor.log                          # bash
+Get-Content spark\logs\traffic_processor.log -Tail 20 -Wait      # PowerShell
+
+# Stop all streaming jobs
+./scripts/stop_spark_jobs.sh         # macOS / Linux / Git Bash
+.\scripts\stop_spark_jobs.ps1        # Windows PowerShell
+```
+
+> **Don't submit with raw `spark-submit` commands** — without `spark.cores.max=2`,
+> the first job grabs every worker core and the other two hang forever in WAITING state.
+> The scripts set the right configs for you.
 
 ### Stopping the Platform
 
 ```bash
 # Stop all services
-docker-compose down
+docker compose down
 
 # Stop and remove all data volumes (clean reset)
-docker-compose down -v
+docker compose down -v
 ```
+
+> After a full restart (`docker compose up -d`), re-run the Spark jobs script —
+> the streaming jobs do not auto-start with the stack.
 
 ---
 
@@ -447,14 +480,17 @@ NileFlow/
 ├── alerts/
 │   └── discord_alerter.py          # Redis Pub/Sub → Discord webhook
 ├── scripts/
+│   ├── run_spark_jobs.ps1 / .sh    # Submit all 3 Spark streaming jobs (use these!)
+│   ├── stop_spark_jobs.ps1 / .sh   # Stop all streaming jobs
 │   ├── create_kafka_topics.sh      # Manual topic creation (optional)
+│   ├── azure-deploy.sh             # Azure deployment script
 │   └── test_redis_alert.py         # Integration test for Redis alert pipeline
 ├── tests/
 │   └── test_cassandra_storage.py   # Cassandra write/read validation
 ├── docs/
-│   ├── Project_Plan_NileFlow.pdf   # Project plan and milestones
-│   ├── NileFlow_Team_Playbook.pdf  # Team playbook
-│   └── NileFlow_Setup_Guide.md     # Detailed setup and run guide
+│   ├── Project_Plan_NileFlow.pdf        # Project plan and milestones
+│   ├── NileFlow_Team_Playbook.pdf       # Team playbook
+│   └── NileFlow_Setup_Guide_v2.pdf      # Step-by-step setup & run guide (PowerShell + bash)
 ├── assets/                         # Logo, banner, architecture diagram, screenshots
 ├── docker-compose.yml              # 18 services — full platform
 ├── requirements.txt                # Python dependencies (for local dev)
